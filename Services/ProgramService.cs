@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 
 namespace ProgramVersionApi.Services;
@@ -5,33 +6,79 @@ namespace ProgramVersionApi.Services;
 public class ProgramService
 {
     private readonly string _filePath;
-    
+    private ConcurrentDictionary<string, string>? _cache;
+    private DateTime _lastLoadTime;
+    private readonly TimeSpan _cacheDuration = TimeSpan.FromMinutes(5);
+    private readonly SemaphoreSlim _semaphore = new(1, 1);
+
     public ProgramService()
     {
         _filePath = Path.Combine(Directory.GetCurrentDirectory(), "Data", "programs.json");
     }
-    
-    public async Task<string?> GetVersionByNameAsync(string programName)
+
+    private async Task EnsureCacheLoadedAsync()
     {
-        if (!File.Exists(_filePath))
-            return null;
-            
-        var json = await File.ReadAllTextAsync(_filePath);
-        using var doc = JsonDocument.Parse(json);
-        
-        var root = doc.RootElement;
-        if (root.TryGetProperty("programs", out var programs))
+        if (_cache != null && DateTime.UtcNow - _lastLoadTime < _cacheDuration)
+            return;
+
+        await _semaphore.WaitAsync();
+        try
         {
-            foreach (var program in programs.EnumerateArray())
+            // Double-check after acquiring semaphore
+            if (_cache != null && DateTime.UtcNow - _lastLoadTime < _cacheDuration)
+                return;
+
+            if (!File.Exists(_filePath))
             {
-                if (program.TryGetProperty("ProgramName", out var name) &&
-                    name.GetString()?.Equals(programName, StringComparison.OrdinalIgnoreCase) == true)
+                _cache = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                return;
+            }
+
+            var json = await File.ReadAllTextAsync(_filePath);
+            using var doc = JsonDocument.Parse(json);
+            
+            var newCache = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("programs", out var programs))
+            {
+                foreach (var program in programs.EnumerateArray())
                 {
-                    return program.GetProperty("Version").GetString();
+                    if (program.TryGetProperty("ProgramName", out var name) &&
+                        program.TryGetProperty("Version", out var version))
+                    {
+                        var nameStr = name.GetString();
+                        var versionStr = version.GetString();
+                        if (nameStr != null && versionStr != null)
+                        {
+                            newCache[nameStr] = versionStr;
+                        }
+                    }
                 }
             }
+
+            _cache = newCache;
+            _lastLoadTime = DateTime.UtcNow;
+        }
+        finally
+        {
+            _semaphore.Release();
+        }
+    }
+
+    public async Task<string?> GetVersionByNameAsync(string programName)
+    {
+        await EnsureCacheLoadedAsync();
+        
+        if (_cache != null && _cache.TryGetValue(programName, out var version))
+        {
+            return version;
         }
         
         return null;
+    }
+
+    public IEnumerable<string> GetAvailablePrograms()
+    {
+        return _cache?.Keys ?? Enumerable.Empty<string>();
     }
 }
