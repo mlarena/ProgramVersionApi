@@ -1,0 +1,9 @@
+{
+  "programs": [
+    { "ProgramName": "Firefox", "Version": "124.0.2" },
+    { "ProgramName": "Visual Studio Code", "Version": "1.88.0" },
+    { "ProgramName": "VLC Media Player", "Version": "3.0.20" },
+    { "ProgramName": "Python", "Version": "3.12.2" },
+    { "ProgramName": "Blender", "Version": "4.1.0" }
+  ]
+}
